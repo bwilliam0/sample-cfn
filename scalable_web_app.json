@@ -14,6 +14,13 @@
       "us-east-1"               : { "AMI" : "ami-01b9c80edbc40f3e2" }
     }
   },
+
+  "Parameters": {
+    "KeyId": {
+      "Description": "The RSA key that will be used for SSH access. ",
+      "Type" : "AWS::EC2::KeyPair::KeyName"
+    }
+  },
   
   "Resources" : {
     
@@ -150,7 +157,7 @@
             "Arn" : "arn:aws:iam::088677765788:instance-profile/EC2AutomateDeployments"
           },
           "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "StagingWebServerSecurityGroupStack", "Outputs.SecurityGroupId" ] } ],
-          "KeyName" : "foreign_client_key",
+          "KeyName" : { "Ref" : "KeyId" },
           "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI" ] },
           "InstanceType" : "t2.nano"
         }
@@ -318,7 +325,7 @@
             "Arn" : "arn:aws:iam::088677765788:instance-profile/EC2AutomateDeployments"
           },
           "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ProductionWebServerSecurityGroupStack", "Outputs.SecurityGroupId" ] } ],
-          "KeyName" : "foreign_client_key",
+          "KeyName" : { "Ref" : "KeyId" },
           "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI" ] },
           "InstanceType" : "t2.nano"
         }
