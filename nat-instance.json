@@ -1,0 +1,92 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  
+  "Description" : "Creates a nat instance",
+  
+  "Mappings" : {
+    "RegionMap" : {
+      "us-west-2"           : { "AMI" : "ami-79eca201" }
+    }
+  },
+  
+  "Parameters" : {
+    "InstanceType": {
+      "Description" : "WebServer EC2 instance type",
+      "Type" : "String",
+      "Default" : "t3.micro",
+      "AllowedValues" : [ "t3.micro", "t2.micro","t2.nano","t1.micro","m1.small","m1.medium","m1.large","m1.xlarge","m2.xlarge","m2.2xlarge","m2.4xlarge","m3.xlarge","m3.2xlarge","c1.medium","c1.xlarge","cc1.4xlarge","cc2.8xlarge","cg1.4xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    
+    "SubnetID" : {
+      "Description" : "The ID of the subnet this NAT instance will be placed in",
+      "Type" : "AWS::EC2::Subnet::Id"
+    },
+    
+    "VpcId" : {
+      "Description" : "The ID of the VPC the security group will be assigned to",
+      "Type" : "AWS::EC2::VPC::Id"
+    },
+
+    "KeyId": {
+      "Description": "The RSA key that will be used for SSH access. ",
+      "Type" : "AWS::EC2::KeyPair::KeyName"
+    }
+  },
+  
+  "Resources" : {
+    "NATSecurityGroup" : {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VpcId" },
+        "GroupName" : { "Fn::Join" : [ "", [ "nat-securitygroup-", { "Ref" : "AWS::StackId" } ] ] },
+        "GroupDescription" : "Security group for managing access to the nat instance",
+        "SecurityGroupIngress" : [ {
+          "CidrIp" : "10.0.0.0/16",
+          "Description" : "Accepts traffic from VPC into the NAT instance",
+          "FromPort" : "0",
+          "ToPort" : "65535",
+          "IpProtocol" : "-1"
+        } ],
+        "SecurityGroupEgress" : {
+          "CidrIp" : "0.0.0.0/0",
+          "Description" : "Allows outbound communication on all ports",
+          "FromPort" : "0",
+          "ToPort" : "65535",
+          "IpProtocol" : "-1"
+        },
+        "Tags" : [ { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } } ]
+      }
+    },
+    
+    "NATInstance" : {
+      "Type" : "AWS::EC2::Instance",
+      "Properties" : {
+        "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI" ] },
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "KeyName" : "foreign_client_key",
+        "NetworkInterfaces" : [ {
+          "AssociatePublicIpAddress" : "true",
+          "DeviceIndex" : "0",
+          "GroupSet" : [ { "Ref" : "NATSecurityGroup" } ],
+          "SubnetId" : { "Ref" : "SubnetID" }
+        } ],
+        "SourceDestCheck" : "false",
+        "UserData" : { "Fn::Base64" : { "Fn::Join" : [ "", [
+          "#!/bin/bash -x\n",
+          "export DEBIAN_FRONTEND=noninteractive\n",
+          "apt-get -q update\n",
+          "apt-get -yq upgrade\n"
+        ] ] } },
+        "Tags" : [ { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } }, { "Key" : "Name", "Value" : { "Fn::Join" : [ "", [ "NAT-instance-", { "Ref" : "AWS::StackId" } ] ] } } ]
+      }
+    }
+  },
+  
+  "Outputs" : {
+    "NATInstanceId" : {
+      "Description" : "The ID of the created NAT instance",
+      "Value": { "Ref" : "NATInstance" }
+    }
+  }
+}

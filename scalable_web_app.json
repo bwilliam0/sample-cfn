@@ -1,0 +1,398 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  
+  "Description" : "Creates scalable web app environment",
+  
+  "Mappings" : {
+    "TemplateURLMap" : {
+      "VPC"                     : { "URL" : "https://s3-us-west-2.amazonaws.com/cf-templates-1sheeqsxfeeil-us-west-2/web_app_basic_vpc.json" },
+      "BastionInstance"         : { "URL" : "https://s3-us-west-2.amazonaws.com/cf-templates-1sheeqsxfeeil-us-west-2/bastion-instance.json" },
+      "WebserverSecurityGroup"  : { "URL" : "https://s3-us-west-2.amazonaws.com/cf-templates-1sheeqsxfeeil-us-west-2/web-server-security.json" }
+    },
+    "RegionMap" : {
+      "us-west-2"               : { "AMI" : "ami-0a7c5d72" },
+      "us-east-1"               : { "AMI" : "ami-01b9c80edbc40f3e2" }
+    }
+  },
+  
+  "Resources" : {
+    
+    "ProductionVPCStack" : {
+      "Type" : "AWS::CloudFormation::Stack",
+      "Properties" : {
+        "TemplateURL" : { "Fn::FindInMap" : [ "TemplateURLMap", "VPC", "URL" ] }
+      }
+    },
+    
+    "StagingVPCStack" : {
+      "Type" : "AWS::CloudFormation::Stack",
+      "Properties" : {
+        "TemplateURL" : { "Fn::FindInMap" : [ "TemplateURLMap", "VPC", "URL" ] }
+      }
+    },
+    
+    "ProductionBastion" : {
+      "Type" : "AWS::CloudFormation::Stack",
+      "Properties" : {
+        "TemplateURL" : { "Fn::FindInMap" : [ "TemplateURLMap", "BastionInstance", "URL" ] },
+        "Parameters" : {
+          "VpcId" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.VpcId" ] },
+          "SubnetId" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PublicSubnetAId" ] },
+          "BastionInstanceName" : "Production Bastion Host"
+        }
+      }
+    },
+    
+    "StagingBastion" : {
+      "Type" : "AWS::CloudFormation::Stack",
+      "Properties" : {
+        "TemplateURL" : { "Fn::FindInMap" : [ "TemplateURLMap", "BastionInstance", "URL" ] },
+        "Parameters" : {
+          "VpcId" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.VpcId" ] },
+          "SubnetId" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PublicSubnetAId" ] },
+          "BastionInstanceName" : "Staging Bastion Host"
+        }
+      }
+    },
+    
+    "StagingLoadBalancerSecurityGroup" : {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.VpcId" ] },
+        "GroupDescription" : "Load Balancer Security Group",
+        "SecurityGroupEgress" : {
+          "CidrIp" : "0.0.0.0/0",
+          "Description" : "Allows outbound communication on all ports",
+          "FromPort" : "0",
+          "ToPort" : "65535",
+          "IpProtocol" : "-1"
+        },
+        "SecurityGroupIngress" : {
+          "CidrIp" : "0.0.0.0/0",
+          "Description" : "Accept web traffic to the load balancer",
+          "FromPort" : "80",
+          "ToPort" : "80",
+          "IpProtocol" : "6"
+        },
+        "Tags" : [ { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } } ]
+      }
+    },
+    
+    "StagingTargetGroup" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties" : {
+        "HealthCheckIntervalSeconds" : "10",
+        "HealthCheckPath" : "/",
+        "HealthCheckPort" : "80",
+        "HealthCheckProtocol" : "HTTP",
+        "HealthCheckTimeoutSeconds" : "5",
+        "HealthyThresholdCount" : "3",
+        "Matcher" : {
+          "HttpCode" : "200"
+        },
+        "Name" : "StagingTargetGroup",
+        "Port" : "80",
+        "Protocol" : "HTTP",
+        "TargetType" : "instance",
+        "UnhealthyThresholdCount" : "2",
+        "VpcId" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.VpcId" ] }
+      }
+    },
+    
+    "StagingLoadBalancer" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties" : {
+        "Name" : "StagingLoadBalancer",
+        "Scheme" : "internet-facing",
+        "SecurityGroups" : [ { "Ref" : "StagingLoadBalancerSecurityGroup" } ],
+        "Subnets" : [ { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PublicSubnetAId" ] }, { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PublicSubnetBId" ] } ],
+        "Type" : "application",
+        "IpAddressType" : "ipv4"
+      }
+    },
+    
+    "StagingWebServerSecurityGroupStack" : {
+      "Type" : "AWS::CloudFormation::Stack",
+      "Properties" : {
+        "TemplateURL" : { "Fn::FindInMap" : [ "TemplateURLMap", "WebserverSecurityGroup", "URL" ] },
+        "Parameters" : {
+          "VpcId" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.VpcId" ] },
+          "BastionSecurityGroup" : { "Fn::GetAtt" : [ "StagingBastion", "Outputs.BastionSecurityGroupId" ] },
+          "LoadBalancerSecurityGroup" : { "Ref" : "StagingLoadBalancerSecurityGroup" }
+        }
+      }
+    },
+    
+    "StagingWebserverLaunchTemplate" : {
+      "Type" : "AWS::EC2::LaunchTemplate",
+      "Properties" : {
+        "LaunchTemplateName" : "blank-webserver-template",
+        "LaunchTemplateData" : {
+          "TagSpecifications" : [ { 
+            "ResourceType" : "instance",
+            "Tags" : [ { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } } ]
+          } ],
+          "UserData" : { "Fn::Base64" : { "Fn::Join" : [ "", [
+            "#!/bin/bash -x\n",
+            "export DEBIAN_FRONTEND=noninteractive\n",
+            "apt-get -q update\n",
+            "apt-get -yq upgrade\n",
+            "cd /home/ubuntu\n",
+            "wget https://aws-codedeploy-us-west-2.s3.amazonaws.com/latest/install\n",
+            "chmod +x ./install\n",
+            "./install auto\n",
+            "service codedeploy-agent start\n",
+            "rm /var/www/html/index.html",
+            "service apache2 restart\n"
+          ] ] } },
+          "InstanceInitiatedShutdownBehavior" : "terminate",
+          "IamInstanceProfile" : {
+            "Arn" : "arn:aws:iam::088677765788:instance-profile/EC2AutomateDeployments"
+          },
+          "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "StagingWebServerSecurityGroupStack", "Outputs.SecurityGroupId" ] } ],
+          "KeyName" : "foreign_client_key",
+          "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI" ] },
+          "InstanceType" : "t2.nano"
+        }
+      }
+    },
+    
+    "StagingAutoScalingWebServerGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "DesiredCapacity" : "2",
+        "LaunchTemplate" : { 
+          "LaunchTemplateId" : { "Ref" : "StagingWebserverLaunchTemplate" },
+          "Version" : "1"
+        },
+        "MaxSize" : "2",
+        "MinSize" : "2",
+        "TargetGroupARNs" : [ { "Ref" : "StagingTargetGroup" } ],
+        "VPCZoneIdentifier" : [ { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PrivateSubnetAId" ] }, { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PrivateSubnetBId" ] } ]
+      },
+      "UpdatePolicy" : {
+        "AutoScalingReplacingUpdate" : {
+          "WillReplace" : "true"
+        }
+      }
+    },
+    
+    "StagingLoadBalancerListener" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties" : {
+        "DefaultActions" : [ {
+          "TargetGroupArn" : { "Ref" : "StagingTargetGroup" },
+          "Type" : "forward"
+        } ],
+        "LoadBalancerArn" : { "Ref" : "StagingLoadBalancer" },
+        "Port" : "80",
+        "Protocol" : "HTTP"
+      }
+    },
+    
+    "ProductionLoadBalancerSecurityGroup" : {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.VpcId" ] },
+        "GroupDescription" : "Load Balancer Security Group",
+        "SecurityGroupEgress" : {
+          "CidrIp" : "0.0.0.0/0",
+          "Description" : "Allows outbound communication on all ports",
+          "FromPort" : "0",
+          "ToPort" : "65535",
+          "IpProtocol" : "-1"
+        },
+        "SecurityGroupIngress" : {
+          "CidrIp" : "0.0.0.0/0",
+          "Description" : "Accept web traffic to the load balancer",
+          "FromPort" : "80",
+          "ToPort" : "80",
+          "IpProtocol" : "6"
+        },
+        "Tags" : [ { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } } ]
+      }
+    },
+    
+    "ProductionTargetGroup" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Properties" : {
+        "HealthCheckIntervalSeconds" : "10",
+        "HealthCheckPath" : "/",
+        "HealthCheckPort" : "80",
+        "HealthCheckProtocol" : "HTTP",
+        "HealthCheckTimeoutSeconds" : "5",
+        "HealthyThresholdCount" : "3",
+        "Matcher" : {
+          "HttpCode" : "200"
+        },
+        "Name" : "ProductionTargetGroup",
+        "Port" : "80",
+        "Protocol" : "HTTP",
+        "TargetType" : "instance",
+        "UnhealthyThresholdCount" : "2",
+        "VpcId" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.VpcId" ] }
+      }
+    },
+    
+    "ProductionLoadBalancer" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Properties" : {
+        "Name" : "ProductionLoadBalancer",
+        "Scheme" : "internet-facing",
+        "SecurityGroups" : [ { "Ref" : "ProductionLoadBalancerSecurityGroup" } ],
+        "Subnets" : [ { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PublicSubnetAId" ] }, { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PublicSubnetBId" ] } ],
+        "Type" : "application",
+        "IpAddressType" : "ipv4"
+      }
+    },
+    
+    "ProductionWebServerSecurityGroupStack" : {
+      "Type" : "AWS::CloudFormation::Stack",
+      "Properties" : {
+        "TemplateURL" : { "Fn::FindInMap" : [ "TemplateURLMap", "WebserverSecurityGroup", "URL" ] },
+        "Parameters" : {
+          "VpcId" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.VpcId" ] },
+          "BastionSecurityGroup" : { "Fn::GetAtt" : [ "ProductionBastion", "Outputs.BastionSecurityGroupId" ] },
+          "LoadBalancerSecurityGroup" : { "Ref" : "ProductionLoadBalancerSecurityGroup" }
+        }
+      }
+    },
+    
+    "ProductionAutoScalingWebServerGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "Properties" : {
+        "DesiredCapacity" : "2",
+        "LaunchTemplate" : { 
+          "LaunchTemplateId" : { "Ref" : "ProductionWebserverLaunchTemplate" },
+          "Version" : "1"
+        },
+        "MaxSize" : "2",
+        "MinSize" : "2",
+        "TargetGroupARNs" : [ { "Ref" : "ProductionTargetGroup" } ],
+        "VPCZoneIdentifier" : [ { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PrivateSubnetAId" ] }, { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PrivateSubnetBId" ] } ]
+      },
+      "UpdatePolicy" : {
+        "AutoScalingReplacingUpdate" : {
+          "WillReplace" : "true"
+        }
+      }
+    },
+    
+    "ProductionLoadBalancerListener" : {
+      "Type" : "AWS::ElasticLoadBalancingV2::Listener",
+      "Properties" : {
+        "DefaultActions" : [ {
+          "TargetGroupArn" : { "Ref" : "ProductionTargetGroup" },
+          "Type" : "forward"
+        } ],
+        "LoadBalancerArn" : { "Ref" : "ProductionLoadBalancer" },
+        "Port" : "80",
+        "Protocol" : "HTTP"
+      }
+    },
+    
+    "ProductionWebserverLaunchTemplate" : {
+      "Type" : "AWS::EC2::LaunchTemplate",
+      "Properties" : {
+        "LaunchTemplateName" : "production-blank-webserver-template",
+        "LaunchTemplateData" : {
+          "TagSpecifications" : [ { 
+            "ResourceType" : "instance",
+            "Tags" : [ { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } } ]
+          } ],
+          "UserData" : { "Fn::Base64" : { "Fn::Join" : [ "", [
+            "#!/bin/bash -x\n",
+            "export DEBIAN_FRONTEND=noninteractive\n",
+            "apt-get -q update\n",
+            "apt-get -yq upgrade\n",
+            "cd /home/ubuntu\n",
+            "wget https://aws-codedeploy-us-west-2.s3.amazonaws.com/latest/install\n",
+            "chmod +x ./install\n",
+            "./install auto\n",
+            "service codedeploy-agent start\n",
+            "rm /var/www/html/index.html",
+            "service apache2 restart\n"
+          ] ] } },
+          "InstanceInitiatedShutdownBehavior" : "terminate",
+          "IamInstanceProfile" : {
+            "Arn" : "arn:aws:iam::088677765788:instance-profile/EC2AutomateDeployments"
+          },
+          "SecurityGroupIds" : [ { "Fn::GetAtt" : [ "ProductionWebServerSecurityGroupStack", "Outputs.SecurityGroupId" ] } ],
+          "KeyName" : "foreign_client_key",
+          "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI" ] },
+          "InstanceType" : "t2.nano"
+        }
+      }
+    },
+    
+    "CodeDeployApplication" : {
+      "Type" : "AWS::CodeDeploy::Application",
+      "Properties" : {
+        "ApplicationName" : "SimpleWebApp",
+        "ComputePlatform" : "Server"
+      }
+    }
+  },
+  
+  "Outputs" : {
+    "ProductionVPCId" : {
+      "Description" : "The ID for the production VPC",
+      "Value" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.VpcId" ] }
+    },
+    
+    "ProductionPublicSubnetA" : {
+      "Description" : "The ID for production public subnet A",
+      "Value" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PublicSubnetAId" ] }
+    },
+    
+    "ProductionPublicSubnetB" : {
+      "Description" : "The I for production public subnet B",
+      "Value" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PublicSubnetBId" ] }
+    },
+    
+    "ProductionPrivateSubnetA" : {
+      "Description" : "The ID for production private subnet A",
+      "Value" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PrivateSubnetAId" ] }
+    },
+    
+    "ProductionPrivateSubnetB" : {
+      "Description" : "The ID for production private subnet B",
+      "Value" : { "Fn::GetAtt" : [ "ProductionVPCStack", "Outputs.PrivateSubnetBId" ] }
+    },
+    
+    "StagingVPCId" : {
+      "Description" : "The ID for the staging VPC",
+      "Value" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.VpcId" ] }
+    },
+    
+    "StagingPublicSubnetA" : {
+      "Description" : "The ID for staging public subnet A",
+      "Value" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PublicSubnetAId" ] }
+    },
+    
+    "StagingPublicSubnetB" : {
+      "Description" : "The I for staging public subnet B",
+      "Value" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PublicSubnetBId" ] }
+    },
+    
+    "StagingPrivateSubnetA" : {
+      "Description" : "The ID for staging private subnet A",
+      "Value" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PrivateSubnetAId" ] }
+    },
+    
+    "StagingPrivateSubnetB" : {
+      "Description" : "The ID for staging private subnet B",
+      "Value" : { "Fn::GetAtt" : [ "StagingVPCStack", "Outputs.PrivateSubnetBId" ] }
+    },
+    
+    "ProductionAutoScalingGroup" : {
+      "Description" : "The ID for the production autoscaling group",
+      "Value" : { "Ref" : "ProductionAutoScalingWebServerGroup" }
+    },
+    
+    "StagingAutoScalingGroup" : {
+      "Description" : "The ID for the staging autoscaling group",
+      "Value" : { "Ref" : "StagingAutoScalingWebServerGroup" }
+    }
+  }
+}

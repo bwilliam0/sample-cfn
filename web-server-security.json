@@ -1,0 +1,60 @@
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+  
+  "Description" : "Creates a security group for a web server that will be behind a load balancer",
+  
+  "Parameters" : {
+    "VpcId" : {
+      "Description" : "The ID of the VPC this security group will be placed in",
+      "Type" : "String"
+    },
+    
+    "BastionSecurityGroup" : {
+      "Description" : "The ID of the security group that the bastion unit is a part of. Used to allow communication from the bastion host to the webserver",
+      "Type" : "String"
+    },
+    
+    "LoadBalancerSecurityGroup" : {
+      "Description" : "The ID of the security group that the load balancer is a member of. Used to allow communication from the load balancer to the webserver",
+      "Type" : "String"
+    }
+  },
+  
+  "Resources" : {
+    "WebServerSecurityGroup" : {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "VpcId" : { "Ref" : "VpcId" },
+        "GroupDescription" : "Security group for managing access to the webservers",
+        "SecurityGroupEgress" : {
+          "CidrIp" : "0.0.0.0/0",
+          "Description" : "Allows outbound communication on all ports",
+          "FromPort" : "0",
+          "ToPort" : "65535",
+          "IpProtocol" : "-1"
+        },
+        "SecurityGroupIngress" : [ {
+          "SourceSecurityGroupId" : { "Ref" : "BastionSecurityGroup" },
+          "Description" : "Allow SSH from bastion host",
+          "FromPort" : "22",
+          "ToPort" : "22",
+          "IpProtocol" : "6"
+        }, {
+          "SourceSecurityGroupId" : { "Ref" : "LoadBalancerSecurityGroup" },
+          "Description" : "Accept web traffic from the load balancer",
+          "FromPort" : "80",
+          "ToPort" : "80",
+          "IpProtocol" : "6"
+        } ],
+        "Tags" : [ { "Key" : "Application", "Value" : { "Ref" : "AWS::StackId" } } ]
+      }
+    }
+  },
+  
+  "Outputs" : {
+    "SecurityGroupId" : {
+      "Description" : "The ID of the new webserver security group",
+      "Value" : { "Ref" : "WebServerSecurityGroup" }
+    }
+  }
+}
